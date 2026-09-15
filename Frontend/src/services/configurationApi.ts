@@ -1,6 +1,9 @@
 import type { AnalysisResult, AnalyzeFormValues, NormalisedConfiguration } from '../types/configuration';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5200';
+// When VITE_API_BASE_URL is empty the Vite dev-server proxy forwards /api/*
+// to the backend automatically. For production builds set the env var to the
+// actual backend origin (e.g. https://api.example.com).
+const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
 
 // ── Analyse ───────────────────────────────────────────────────────────────────
 

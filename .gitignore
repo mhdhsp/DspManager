@@ -1,0 +1,54 @@
+# ── .NET build output ─────────────────────────────────────
+[Bb]in/
+[Oo]bj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.DotSettings.user
+
+# ── NuGet ──────────────────────────────────────────────────
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# ── Test results ───────────────────────────────────────────
+TestResults/
+coverage/
+*.trx
+*.coveragexml
+
+# ── Node / Frontend ────────────────────────────────────────
+Frontend/node_modules/
+Frontend/dist/
+Frontend/dist-ssr/
+Frontend/*.local
+Frontend/.env.local
+Frontend/.env.*.local
+
+# ── Environment / secrets ──────────────────────────────────
+.env
+.env.local
+.env.production
+*.env
+
+# ── OS / editor ────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# ── Temp files created during dev/CI ──────────────────────
+*.txt
+!docs/**/*.txt
+!README*.txt
+run_npm.bat
+run_tsc.bat
+run_tests.bat

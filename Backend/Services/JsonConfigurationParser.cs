@@ -268,8 +268,45 @@ public sealed class JsonConfigurationParser
             return;
         }
 
-        var entries = ExtractLeafEntries(sectionName, element, issues);
-        sections.Add(new ParsedSection(sectionName, kind, entries));
+        // ── Detect "wrapper" pattern ──────────────────────────────────────
+        // If every child of this section is itself an object (e.g. Settings → {GenSettings:{...}})
+        // treat each child as a separate sub-section rather than serialising it as a JSON string.
+        // This is the common DSP config pattern where the top-level key is a group name.
+        bool allChildrenAreObjects = element.EnumerateObject()
+            .All(p => p.Value.ValueKind == JsonValueKind.Object || p.Value.ValueKind == JsonValueKind.Array);
+
+        bool hasAnyChildObject = element.EnumerateObject()
+            .Any(p => p.Value.ValueKind == JsonValueKind.Object);
+
+        if (hasAnyChildObject && allChildrenAreObjects)
+        {
+            // Each child becomes its own section using "ParentName.ChildName" as the head
+            foreach (var child in element.EnumerateObject())
+            {
+                var childSectionName = $"{sectionName}.{child.Name}";
+
+                if (child.Value.ValueKind == JsonValueKind.Object)
+                {
+                    var childEntries = ExtractLeafEntries(childSectionName, child.Value, issues);
+                    if (childEntries.Count > 0)
+                        sections.Add(new ParsedSection(childSectionName, kind, childEntries));
+                }
+                else if (child.Value.ValueKind == JsonValueKind.Array)
+                {
+                    // Array inside a wrapper section — serialise as a string entry
+                    var entries = new List<ParsedEntry>
+                    {
+                        new(child.Name, child.Value.GetRawText(), "array")
+                    };
+                    sections.Add(new ParsedSection(childSectionName, kind, entries));
+                }
+            }
+            return;
+        }
+
+        // ── Standard flat section ─────────────────────────────────────────
+        var flatEntries = ExtractLeafEntries(sectionName, element, issues);
+        sections.Add(new ParsedSection(sectionName, kind, flatEntries));
     }
 
     // ── Leaf extraction ───────────────────────────────────────────────────

@@ -1,6 +1,9 @@
+using System.Text.Json.Serialization;
+
 namespace HotelConfigAnalyser.Models;
 
 /// <summary>Severity of a validation finding.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum IssueSeverity
 {
     Warning,

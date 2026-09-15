@@ -4,7 +4,14 @@ var builder = WebApplication.CreateBuilder(args);
 
 // ── Services ──────────────────────────────────────────────────────────────────
 
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        // Serialise C# enums as their string names (e.g. "Warning", "Error")
+        // so the frontend receives a string instead of an integer.
+        options.JsonSerializerOptions.Converters.Add(
+            new System.Text.Json.Serialization.JsonStringEnumConverter());
+    });
 
 // Register the pipeline services — each has a single, well-defined responsibility
 builder.Services.AddScoped<JsonConfigurationParser>();

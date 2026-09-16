@@ -18,8 +18,8 @@ public sealed class SettingEntry
     public string? MemberDescription { get; init; }
     public string? MemberDataType { get; init; }
 
-    /// <summary>Always 1 for INSERT generation.</summary>
-    public int RecordStatus { get; init; } = 1;
+    /// <summary>Always 0 for INSERT generation (0 = active in DSP schema).</summary>
+    public int RecordStatus { get; init; } = 0;
 
     public string? Aui { get; init; }
 

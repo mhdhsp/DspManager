@@ -102,14 +102,15 @@ public static class TableSchema
         };
 
     /// <summary>
-    /// Top-level JSON keys (prefixes) that indicate parameter sections.
-    /// Keys starting with any of these are treated as params rather than settings.
+    /// Top-level JSON section name prefixes that indicate flat parameter sections
+    /// (e.g. HtlGeneral, HtlParams when they appear at the top level rather than
+    /// nested inside a "Params" wrapper).
+    /// Note: "Params" itself is handled as a wrapper by the parser and is NOT in this list.
     /// </summary>
     public static readonly IReadOnlyList<string> ParamsSectionPrefixes =
     [
         "HtlGeneral",
         "HtlParams",
-        "Params",
         "Htl",
     ];
 }

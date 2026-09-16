@@ -8,14 +8,22 @@ namespace HotelConfigAnalyser.Services;
 /// Converts a <see cref="ParseResult"/> and user inputs into a
 /// <see cref="NormalisedConfiguration"/>.
 ///
-/// Responsibilities:
-///   - Map each ParsedSection to the correct normalised model.
-///   - Inject Port / Version / Environment into every row.
-///   - Produce one SettingsMasterEntry per unique SettingsHead.
-///   - Produce one ParamsMasterEntry per unique ParamsHead.
-///   - Map database sections to DatabaseConfigEntry.
-///   - Forward parse issues into the result.
-///   - Never throw; accumulate issues instead.
+/// Key mapping rules derived from actual DSP insert patterns:
+///
+///   RecordStatus = 0  (active record — matches sample inserts)
+///
+///   Settings sections:
+///     SettingsType = 'S' for normal settings (GenSettings, EmailSettings, etc.)
+///     SettingsType = 'P' for Hotel/params-linked settings (when section name = "Hotel")
+///
+///   Params sections (encoded as "SettingHead|ParamsHead" from parser):
+///     e.g. "Hotel|HtlGeneral"  → ParamsHead = HtlGeneral, SettingHead = Hotel
+///          "Hotel|ZealConnect" → ParamsHead = ZealConnect, SettingHead = Hotel
+///          "Hotel"             → ParamsHead = Hotel,       SettingHead = Hotel
+///
+///   Database sections:
+///     DataBaseType comes from the "DataBaseType" entry in the parsed section.
+///     ActiveStatus / ReadEnable / WriteEnable from JSON booleans or integers.
 /// </summary>
 public sealed class ConfigurationMapper
 {
@@ -26,9 +34,7 @@ public sealed class ConfigurationMapper
         _logger = logger;
     }
 
-    public NormalisedConfiguration Map(
-        ParseResult parseResult,
-        ConfigurationInput input)
+    public NormalisedConfiguration Map(ParseResult parseResult, ConfigurationInput input)
     {
         _logger.LogInformation("Configuration mapping started.");
 
@@ -43,7 +49,6 @@ public sealed class ConfigurationMapper
         var paramsSettings = new List<ParameterEntry>();
         var issues         = new List<ValidationIssue>(parseResult.Issues);
 
-        // Track seen heads to produce exactly one master record per head
         var seenSettingsHeads = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenParamsHeads   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -64,16 +69,11 @@ public sealed class ConfigurationMapper
                 case SectionKind.Database:
                     MapDatabaseSection(section, port, version, env, databases, issues);
                     break;
-
-                default:
-                    // Unknown sections already warned during parsing
-                    break;
             }
         }
 
         _logger.LogInformation(
-            "Mapping completed. Databases={Db}, SettingsMaster={SM}, SettingsDetails={SD}, " +
-            "ParamsMaster={PM}, ParamsSettings={PS}",
+            "Mapping complete. DB={Db} SM={SM} SD={SD} PM={PM} PS={PS}",
             databases.Count, settingsMaster.Count, settingsDetail.Count,
             paramsMaster.Count, paramsSettings.Count);
 
@@ -105,13 +105,16 @@ public sealed class ConfigurationMapper
     {
         var head = section.Name;
 
+        // "Hotel" under Settings is type 'P' (params-linked); all others are 'S'
+        var settingsType = head.Equals("Hotel", StringComparison.OrdinalIgnoreCase) ? "P" : "S";
+
         if (seenHeads.Add(head))
         {
             masters.Add(new SettingsMasterEntry
             {
                 SettingHead  = head,
-                SettingsType = "S",
-                RecordStatus = 1,
+                SettingsType = settingsType,
+                RecordStatus = 0,   // 0 = active in DSP schema
                 Port         = port,
                 Version      = version,
                 Environment  = env,
@@ -120,7 +123,7 @@ public sealed class ConfigurationMapper
         else
         {
             issues.Add(ValidationIssue.Warn("DUPLICATE_SETTINGS_HEAD",
-                $"Settings section '{head}' appears more than once. A single master row will be generated.",
+                $"Settings section '{head}' appears more than once. Single master row generated.",
                 head));
         }
 
@@ -128,22 +131,31 @@ public sealed class ConfigurationMapper
         {
             details.Add(new SettingEntry
             {
-                SettingsHead     = head,
-                MemberName       = entry.Key,
-                MemberValue      = entry.Value,
+                SettingsHead      = head,
+                MemberName        = entry.Key,
+                MemberValue       = entry.Value,
                 MemberDescription = null,
-                MemberDataType   = entry.DataType,
-                RecordStatus     = 1,
-                Aui              = null,
-                Port             = port,
-                Version          = version,
-                Environment      = env,
+                MemberDataType    = entry.DataType,
+                RecordStatus      = 0,
+                Aui               = null,
+                Port              = port,
+                Version           = version,
+                Environment       = env,
             });
         }
     }
 
     // ── Params mapping ────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Handles two section name formats:
+    ///
+    ///   1. "Hotel"             → plain params section, ParamsHead=Hotel, SettingHead=Hotel
+    ///   2. "Hotel|HtlGeneral"  → child section, ParamsHead=HtlGeneral, SettingHead=Hotel, ParentHead=Hotel
+    ///   3. "Airline|Galileo"   → child section, ParamsHead=Galileo, SettingHead=Airline (or "General")
+    ///
+    /// The '|' encoding is set by the parser in ParseParamsWrapper.
+    /// </summary>
     private static void MapParamsSection(
         ParsedSection section,
         string port, string version, string env,
@@ -152,18 +164,33 @@ public sealed class ConfigurationMapper
         List<ParameterEntry> settings,
         List<ValidationIssue> issues)
     {
-        var head = section.Name;
+        string paramsHead;
+        string settingHead;
+        string? parentHead;
 
-        // Derive a SettingHead association: strip known param prefixes to find the base
-        var settingHead = DeriveSettingHeadFromParamsHead(head);
+        var pipeIdx = section.Name.IndexOf('|');
+        if (pipeIdx >= 0)
+        {
+            // Encoded child: "SettingHead|ParamsHead"
+            settingHead = section.Name[..pipeIdx];
+            paramsHead  = section.Name[(pipeIdx + 1)..];
+            parentHead  = settingHead;
+        }
+        else
+        {
+            // Top-level group — ParamsHead and SettingHead are the same
+            paramsHead  = section.Name;
+            settingHead = DeriveSettingHeadFromParamsHead(section.Name);
+            parentHead  = null;
+        }
 
-        if (seenHeads.Add(head))
+        if (seenHeads.Add(paramsHead))
         {
             masters.Add(new ParamsMasterEntry
             {
-                ParamsHead   = head,
+                ParamsHead   = paramsHead,
                 SettingHead  = settingHead,
-                RecordStatus = 1,
+                RecordStatus = 0,
                 Port         = port,
                 Version      = version,
                 Environment  = env,
@@ -172,25 +199,25 @@ public sealed class ConfigurationMapper
         else
         {
             issues.Add(ValidationIssue.Warn("DUPLICATE_PARAMS_HEAD",
-                $"Params section '{head}' appears more than once. A single master row will be generated.",
-                head));
+                $"Params section '{paramsHead}' appears more than once. Single master row generated.",
+                paramsHead));
         }
 
         foreach (var entry in section.Entries)
         {
             settings.Add(new ParameterEntry
             {
-                ParamsHead       = head,
-                ParentHead       = null,
-                MemberName       = entry.Key,
-                MemberValue      = entry.Value,
+                ParamsHead        = paramsHead,
+                ParentHead        = parentHead,
+                MemberName        = entry.Key,
+                MemberValue       = entry.Value,
                 MemberDescription = null,
-                MemberDataType   = entry.DataType,
-                RecordStatus     = 1,
-                Aui              = null,
-                Port             = port,
-                Version          = version,
-                Environment      = env,
+                MemberDataType    = entry.DataType,
+                RecordStatus      = 0,
+                Aui               = null,
+                Port              = port,
+                Version           = version,
+                Environment       = env,
             });
         }
     }
@@ -203,71 +230,77 @@ public sealed class ConfigurationMapper
         List<DatabaseConfigEntry> databases,
         List<ValidationIssue> issues)
     {
-        // Build a lookup from entry keys
         var lookup = section.Entries
             .GroupBy(e => e.Key, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.First().Value, StringComparer.OrdinalIgnoreCase);
 
-        // DataBaseType: int, default 0
-        int dbType = 0;
-        if (lookup.TryGetValue("DataBaseType", out var dbTypeStr) &&
-            int.TryParse(dbTypeStr, out var dbTypeParsed))
-            dbType = dbTypeParsed;
+        // DataBaseType: int
+        int dbType = TryParseIntOrBool(lookup, "DataBaseType", 0);
 
-        // ActiveStatus / ReadEnable / WriteEnable: int, default 1
-        int activeStatus = TryParseInt(lookup, "ActiveStatus", 1);
-        int readEnable   = TryParseInt(lookup, "ReadEnable",   1);
-        int writeEnable  = TryParseInt(lookup, "WriteEnable",  1);
+        // ActiveStatus / ReadEnable / WriteEnable: support both bool strings and ints
+        int activeStatus = TryParseIntOrBool(lookup, "ActiveStatus", 1);
+        int readEnable   = TryParseIntOrBool(lookup, "ReadEnable",   1);
+        int writeEnable  = TryParseIntOrBool(lookup, "WriteEnable",  1);
 
-        // DateTime fields
         DateTime? begin = TryParseDateTime(lookup, "ActivePeriodBegin", issues, section.Name);
         DateTime? end   = TryParseDateTime(lookup, "ActivePeriodEnd",   issues, section.Name);
 
         databases.Add(new DatabaseConfigEntry
         {
-            DataBaseType       = dbType,
-            Description        = GetOrNull(lookup, "Description"),
-            UserName           = GetOrNull(lookup, "UserName"),
-            Password           = GetOrNull(lookup, "Password"),
-            DataBaseName       = GetOrNull(lookup, "DataBaseName")
-                               ?? GetOrNull(lookup, "Database")
-                               ?? GetOrNull(lookup, "InitialCatalog"),
-            Server             = GetOrNull(lookup, "Server")
-                               ?? GetOrNull(lookup, "DataSource")
-                               ?? GetOrNull(lookup, "Host"),
-            Provider           = GetOrNull(lookup, "Provider"),
-            ActiveStatus       = activeStatus,
-            ReadEnable         = readEnable,
-            WriteEnable        = writeEnable,
-            Aui                = GetOrNull(lookup, "AUI"),
-            RecordStatus       = 1,
-            Port               = port,
-            Version            = version,
-            Environment        = env,
-            ActivePeriodBegin  = begin,
-            ActivePeriodEnd    = end,
+            DataBaseType      = dbType,
+            Description       = GetOrNull(lookup, "Description"),
+            UserName          = GetOrNull(lookup, "UserName"),
+            Password          = GetOrNull(lookup, "Password"),
+            DataBaseName      = GetOrNull(lookup, "DataBaseName")
+                                ?? GetOrNull(lookup, "DatabaseName")
+                                ?? GetOrNull(lookup, "Database"),
+            Server            = GetOrNull(lookup, "Server")
+                                ?? GetOrNull(lookup, "DataSource")
+                                ?? GetOrNull(lookup, "Host"),
+            Provider          = GetOrNull(lookup, "Provider"),
+            ActiveStatus      = activeStatus,
+            ReadEnable        = readEnable,
+            WriteEnable       = writeEnable,
+            Aui               = GetOrNull(lookup, "AUI"),
+            RecordStatus      = 0,   // 0 = active in DSP schema
+            Port              = port,
+            Version           = version,
+            Environment       = env,
+            ActivePeriodBegin = begin,
+            ActivePeriodEnd   = end,
         });
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// For a plain params section (no parent), derive the SettingHead:
+    ///   Hotel → Hotel (top-level hotel params group)
+    ///   HtlGeneral / HtlParams → Hotel
+    ///   Airline / Insurance / etc. → same as ParamsHead
+    /// </summary>
     private static string DeriveSettingHeadFromParamsHead(string paramsHead)
     {
-        // e.g. HtlGeneral → Hotel, HtlParams → Hotel, Params → General
+        if (paramsHead.Equals("Hotel", StringComparison.OrdinalIgnoreCase))
+            return "Hotel";
         if (paramsHead.StartsWith("Htl", StringComparison.OrdinalIgnoreCase))
             return "Hotel";
-        if (paramsHead.StartsWith("Param", StringComparison.OrdinalIgnoreCase))
-            return "General";
         return paramsHead;
     }
 
     private static string? GetOrNull(Dictionary<string, string?> lookup, string key) =>
         lookup.TryGetValue(key, out var v) ? v : null;
 
-    private static int TryParseInt(Dictionary<string, string?> lookup, string key, int defaultValue)
+    /// <summary>
+    /// Parses a value that can be an integer ("1"), a boolean string ("true"/"false"),
+    /// or already absent.  "true" → 1, "false" → 0.
+    /// </summary>
+    private static int TryParseIntOrBool(Dictionary<string, string?> lookup, string key, int defaultValue)
     {
-        if (lookup.TryGetValue(key, out var s) && int.TryParse(s, out var v))
-            return v;
+        if (!lookup.TryGetValue(key, out var s) || s is null) return defaultValue;
+        if (int.TryParse(s, out var iv)) return iv;
+        if (s.Equals("true",  StringComparison.OrdinalIgnoreCase)) return 1;
+        if (s.Equals("false", StringComparison.OrdinalIgnoreCase)) return 0;
         return defaultValue;
     }
 
@@ -284,7 +317,7 @@ public sealed class ConfigurationMapper
             return dt;
 
         issues.Add(ValidationIssue.Warn("INVALID_DATETIME",
-            $"Could not parse '{key}' value '{s}' as a datetime in section '{context}'. NULL will be used.",
+            $"Could not parse '{key}' = '{s}' as a datetime in '{context}'. NULL will be used.",
             $"{context}.{key}"));
         return null;
     }

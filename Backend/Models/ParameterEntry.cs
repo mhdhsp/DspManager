@@ -22,7 +22,7 @@ public sealed class ParameterEntry
     public string? MemberDescription { get; init; }
     public string? MemberDataType { get; init; }
 
-    public int RecordStatus { get; init; } = 1;
+    public int RecordStatus { get; init; } = 0;
 
     public string? Aui { get; init; }
 

@@ -49,20 +49,20 @@ public sealed class ConfigurationMapperTests
         };
         var sections = new List<ParsedSection>
         {
-            new("Hotel", SectionKind.Settings, entries)
+            new("GenSettings", SectionKind.Settings, entries)   // not "Hotel" → type "S"
         };
         var parseResult = new ParseResult(sections, []);
 
         var config = CreateMapper().Map(parseResult, DefaultInput());
 
-        // One master row for "Hotel"
+        // One master row for "GenSettings"
         Assert.Single(config.SettingsMaster);
-        Assert.Equal("Hotel", config.SettingsMaster[0].SettingHead);
-        Assert.Equal("S",     config.SettingsMaster[0].SettingsType);
+        Assert.Equal("GenSettings", config.SettingsMaster[0].SettingHead);
+        Assert.Equal("S",           config.SettingsMaster[0].SettingsType);
 
         // Three detail rows
         Assert.Equal(3, config.SettingsDetails.Count);
-        Assert.All(config.SettingsDetails, d => Assert.Equal("Hotel", d.SettingsHead));
+        Assert.All(config.SettingsDetails, d => Assert.Equal("GenSettings", d.SettingsHead));
         Assert.Contains(config.SettingsDetails, d => d.MemberName == "Region" && d.MemberValue == "CA");
     }
 

@@ -24,7 +24,7 @@ public sealed class DatabaseConfigEntry
     public int WriteEnable { get; init; } = 1;
 
     public string? Aui { get; init; }
-    public int RecordStatus { get; init; } = 1;
+    public int RecordStatus { get; init; } = 0;
 
     public string Port { get; init; } = string.Empty;
     public string Version { get; init; } = string.Empty;

@@ -15,7 +15,7 @@ public sealed class ParamsMasterEntry
     /// </summary>
     public string SettingHead { get; init; } = "General";
 
-    public int RecordStatus { get; init; } = 1;
+    public int RecordStatus { get; init; } = 0;
 
     public string Port { get; init; } = string.Empty;
     public string Version { get; init; } = string.Empty;

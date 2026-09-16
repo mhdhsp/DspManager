@@ -15,7 +15,7 @@ public sealed class SettingsMasterEntry
     /// </summary>
     public string SettingsType { get; init; } = "S";
 
-    public int RecordStatus { get; init; } = 1;
+    public int RecordStatus { get; init; } = 0;
 
     public string Port { get; init; } = string.Empty;
     public string Version { get; init; } = string.Empty;

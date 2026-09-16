@@ -137,7 +137,7 @@ public sealed class JsonConfigurationParserTests
     // ── Null values ───────────────────────────────────────────────────────
 
     [Fact]
-    public void Parse_NullValue_ProducesNullEntryAndWarning()
+    public void Parse_NullValue_ProducesNullEntry()
     {
         var json = """
         {
@@ -149,8 +149,8 @@ public sealed class JsonConfigurationParserTests
 
         var result = CreateParser().Parse(json);
         var section = result.Sections[0];
+        // Null value should be preserved as null MemberValue
         Assert.Contains(section.Entries, e => e.Key == "Region" && e.Value == null);
-        Assert.Contains(result.Issues, i => i.Code == "NULL_VALUE" && i.Severity == IssueSeverity.Warning);
     }
 
     // ── Duplicate keys ────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ export default defineConfig({
     // so you never need to configure CORS for the dev workflow.
     proxy: {
       '/api': {
-        target: 'http://localhost:5200',
+        target: 'http://localhost:5000',
         changeOrigin: true,
         secure: false,
       },

@@ -17,8 +17,10 @@ export const AnalysisSummary: React.FC<AnalysisSummaryProps> = ({ result }) => {
     <section className="card summary-card" aria-label="Analysis summary">
       <div className="card__header">
         <h2 className="card__title">Configuration Analysis</h2>
-        <span className={`status-pill ${result.canGenerateSql ? 'status-pill--ok' : 'status-pill--error'}`}>
-          {result.canGenerateSql ? 'Ready to generate SQL' : 'Errors must be resolved'}
+        <span className={`status-pill ${result.errorCount === 0 ? 'status-pill--ok' : 'status-pill--warning'}`}>
+          {result.errorCount === 0
+            ? 'Ready — no errors'
+            : `${result.errorCount} issue${result.errorCount !== 1 ? 's' : ''} — SQL will still be generated`}
         </span>
       </div>
 

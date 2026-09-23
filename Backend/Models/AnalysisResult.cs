@@ -27,10 +27,16 @@ public sealed class AnalysisResult
     public int ErrorCount => Issues.Count(i => i.Severity == IssueSeverity.Error);
 
     /// <summary>
-    /// True when there are no blocking errors.
-    /// The UI enables "Generate SQL" only when this is true.
+    /// SQL generation is always available as long as the JSON was parseable
+    /// and produced at least some configuration data.
+    /// Errors are listed separately but never block generation.
     /// </summary>
-    public bool CanGenerateSql => ErrorCount == 0;
+    public bool CanGenerateSql => NormalisedConfig is not null &&
+        (NormalisedConfig.Databases.Count > 0 ||
+         NormalisedConfig.SettingsMaster.Count > 0 ||
+         NormalisedConfig.SettingsDetails.Count > 0 ||
+         NormalisedConfig.ParamsMaster.Count > 0 ||
+         NormalisedConfig.ParamsSettings.Count > 0);
 
     // ── Per-table summaries ───────────────────────────────────────────────
     public IReadOnlyList<TableAnalysisSummary> TableSummaries { get; init; } = [];

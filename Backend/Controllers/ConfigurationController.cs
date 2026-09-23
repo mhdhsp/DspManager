@@ -117,32 +117,35 @@ public sealed class ConfigurationController : ControllerBase
 
         var config = request.Config;
 
-        // Re-validate that we won't generate SQL for an invalid environment
+        // Only block if the environment is completely absent or invalid —
+        // we need it to resolve the correct table prefix.
         if (string.IsNullOrWhiteSpace(config.Environment) ||
             !HotelConfigAnalyser.Schema.ConfigurationTableMapping.ValidEnvironments.Contains(config.Environment))
         {
             return BadRequest(Problem(
-                $"Cannot generate SQL: environment '{config.Environment}' is not valid.",
+                $"Cannot generate SQL: environment '{config.Environment}' is not valid (must be BETA or LIVE).",
                 title: "Invalid environment"));
         }
 
-        if (string.IsNullOrWhiteSpace(config.Port))
-            return BadRequest(Problem("Cannot generate SQL: Port is required.", title: "Missing Port"));
+        // Port and Version default to safe fallbacks rather than blocking
+        var safePort    = string.IsNullOrWhiteSpace(config.Port)    ? "80"  : config.Port;
+        var safeVersion = string.IsNullOrWhiteSpace(config.Version) ? "1.0" : config.Version;
 
-        if (string.IsNullOrWhiteSpace(config.Version))
-            return BadRequest(Problem("Cannot generate SQL: Version is required.", title: "Missing Version"));
+        // Build a working config with safe defaults if needed
+        var workingConfig = (safePort != config.Port || safeVersion != config.Version)
+            ? config with { Port = safePort, Version = safeVersion }
+            : config;
 
         _logger.LogInformation(
             "SQL generation request received. Environment={Env}, Port={Port}, Version={Version}",
-            config.Environment, config.Port, config.Version);
+            workingConfig.Environment, workingConfig.Port, workingConfig.Version);
 
-        string sql = _sqlGenerator.Generate(config);
+        string sql = _sqlGenerator.Generate(workingConfig);
 
-        // Build a safe download filename: hotel-config-BETA-80-v6.0.sql
-        var safeEnv     = SanitiseFilenameSegment(config.Environment);
-        var safePort    = SanitiseFilenameSegment(config.Port);
-        var safeVersion = SanitiseFilenameSegment(config.Version);
-        var filename    = $"hotel-config-{safeEnv}-{safePort}-v{safeVersion}.sql";
+        var safeEnvSeg  = SanitiseFilenameSegment(workingConfig.Environment);
+        var safePortSeg = SanitiseFilenameSegment(workingConfig.Port);
+        var safeVerSeg  = SanitiseFilenameSegment(workingConfig.Version);
+        var filename    = $"hotel-config-{safeEnvSeg}-{safePortSeg}-v{safeVerSeg}.sql";
 
         _logger.LogInformation("SQL generation completed. DownloadFilename='{Filename}'", filename);
 

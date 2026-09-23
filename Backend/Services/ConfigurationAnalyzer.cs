@@ -38,14 +38,15 @@ public sealed class ConfigurationAnalyzer
         // ── 1. Parse ──────────────────────────────────────────────────────
         var parseResult = _parser.Parse(input.JsonContent);
 
-        // If JSON itself is broken, return immediately with the parse errors
+        // Only truly fatal parse errors (invalid JSON, empty file) prevent mapping.
+        // All other issues are collected and reported alongside the generated SQL.
         bool hasFatalParseError = parseResult.Issues.Any(i =>
             i.Severity == IssueSeverity.Error &&
-            i.Code is "INVALID_JSON" or "EMPTY_JSON" or "JSON_NOT_OBJECT" or "EMPTY_CONFIGURATION");
+            i.Code is "INVALID_JSON" or "EMPTY_JSON" or "JSON_NOT_OBJECT");
 
         if (hasFatalParseError)
         {
-            _logger.LogWarning("Analysis aborted: fatal parse errors found.");
+            _logger.LogWarning("Analysis aborted: JSON could not be parsed.");
             return BuildResult(input, new NormalisedConfiguration
             {
                 Port        = input.Port.Trim(),
@@ -56,13 +57,12 @@ public sealed class ConfigurationAnalyzer
             }, parseResult.Issues);
         }
 
-        // ── 2. Map ────────────────────────────────────────────────────────
+        // ── 2. Map — always proceed even if there are parse warnings ──────
         var normalisedConfig = _mapper.Map(parseResult, input);
 
-        // ── 3. Validate ───────────────────────────────────────────────────
+        // ── 3. Validate — collect issues but never block SQL generation ───
         var validationIssues = _validator.Validate(normalisedConfig);
 
-        // Merge all issues: parse/map issues already on the config + new validation issues
         var allIssues = normalisedConfig.ParseIssues
             .Concat(validationIssues)
             .ToList();

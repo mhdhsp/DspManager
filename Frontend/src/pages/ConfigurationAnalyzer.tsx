@@ -230,8 +230,7 @@ export const ConfigurationAnalyzer: React.FC = () => {
               type="button"
               className="btn btn--primary btn--lg"
               onClick={handleGenerateSql}
-              disabled={!result.canGenerateSql || isLoading}
-              title={!result.canGenerateSql ? 'Resolve all errors before generating SQL' : undefined}
+              disabled={!result.normalisedConfig || isLoading}
             >
               {step === 'generating' ? (
                 <><Spinner /> Generating SQL…</>
@@ -239,12 +238,6 @@ export const ConfigurationAnalyzer: React.FC = () => {
                 'Generate SQL'
               )}
             </button>
-
-            {!result.canGenerateSql && (
-              <span className="blocked-hint">
-                SQL generation is disabled — resolve all errors above first.
-              </span>
-            )}
           </div>
         </>
       )}

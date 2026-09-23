@@ -21,7 +21,7 @@ public sealed class ConfigurationMapperTests
             IncludeTransaction = true,
         };
 
-    // ── Environment mapping ───────────────────────────────────────────────
+    // ── Environment normalisation ─────────────────────────────────────────
 
     [Theory]
     [InlineData("beta",  "BETA")]
@@ -30,105 +30,300 @@ public sealed class ConfigurationMapperTests
     [InlineData("LIVE",  "LIVE")]
     public void Map_Environment_NormalisedToUpperCase(string inputEnv, string expectedEnv)
     {
-        var parseResult = new ParseResult([], []);
-        var input       = DefaultInput(inputEnv);
-        var config      = CreateMapper().Map(parseResult, input);
+        var config = CreateMapper().Map(new ParseResult([], []), DefaultInput(inputEnv));
         Assert.Equal(expectedEnv, config.Environment);
     }
 
-    // ── Settings section → settings master + details ───────────────────────
+    // ── TABLE 2: Settings Master whitelist ────────────────────────────────
 
-    [Fact]
-    public void Map_SettingsSection_ProducesOneMasterAndManyDetails()
+    [Theory]
+    [InlineData("GenSettings",      "S")]
+    [InlineData("EmailSettings",    "S")]
+    [InlineData("TemplateSettings", "S")]
+    [InlineData("Hotel",            "P")]
+    public void Map_AllowedSettingsHead_ProducesMasterRow(string head, string expectedType)
     {
-        var entries = new List<ParsedEntry>
-        {
-            new("Region",    "CA",  "string"),
-            new("GDSswitch", "0",   "string"),
-            new("MobileGDS", "AM",  "string"),
-        };
-        var sections = new List<ParsedSection>
-        {
-            new("GenSettings", SectionKind.Settings, entries)   // not "Hotel" → type "S"
-        };
-        var parseResult = new ParseResult(sections, []);
+        var sections    = new List<ParsedSection> { new(head, SectionKind.Settings, [new("K", "V", "string")]) };
+        var config      = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
 
-        var config = CreateMapper().Map(parseResult, DefaultInput());
-
-        // One master row for "GenSettings"
         Assert.Single(config.SettingsMaster);
-        Assert.Equal("GenSettings", config.SettingsMaster[0].SettingHead);
-        Assert.Equal("S",           config.SettingsMaster[0].SettingsType);
+        Assert.Equal(head,         config.SettingsMaster[0].SettingHead);
+        Assert.Equal(expectedType, config.SettingsMaster[0].SettingsType);
+        Assert.Equal(0,            config.SettingsMaster[0].RecordStatus);
+    }
 
-        // Three detail rows
-        Assert.Equal(3, config.SettingsDetails.Count);
-        Assert.All(config.SettingsDetails, d => Assert.Equal("GenSettings", d.SettingsHead));
-        Assert.Contains(config.SettingsDetails, d => d.MemberName == "Region" && d.MemberValue == "CA");
+    [Theory]
+    [InlineData("AirSettings")]
+    [InlineData("SMSSettings")]
+    [InlineData("CacheGenSettings")]
+    [InlineData("BucketStoreSettings")]
+    [InlineData("WhatsAppSettings")]
+    public void Map_NonWhitelistedSettingsHead_IsSkipped(string head)
+    {
+        var sections    = new List<ParsedSection> { new(head, SectionKind.Settings, [new("K", "V", "string")]) };
+        var config      = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        Assert.Empty(config.SettingsMaster);
+        Assert.Empty(config.SettingsDetails);
     }
 
     [Fact]
-    public void Map_DuplicateSettingsSectionName_OneMasterRowProduced()
+    public void Map_NonWhitelistedSettings_ProducesSkippedWarning()
     {
-        var sections = new List<ParsedSection>
-        {
-            new("Hotel", SectionKind.Settings, [new("Region", "CA", "string")]),
-            new("Hotel", SectionKind.Settings, [new("Country", "US", "string")]),
-        };
-        var parseResult = new ParseResult(sections, []);
-        var config      = CreateMapper().Map(parseResult, DefaultInput());
+        var sections    = new List<ParsedSection> { new("AirSettings", SectionKind.Settings, [new("K", "V", "string")]) };
+        var config      = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
 
-        // Only one master row despite two sections with same name
-        Assert.Single(config.SettingsMaster);
+        Assert.Contains(config.ParseIssues, i => i.Code == "SETTINGS_HEAD_SKIPPED");
     }
 
-    // ── Params section → params master + settings ─────────────────────────
+    // ── TABLE 3: Settings Details — Hotel excluded ────────────────────────
+
+    [Theory]
+    [InlineData("GenSettings")]
+    [InlineData("EmailSettings")]
+    [InlineData("TemplateSettings")]
+    public void Map_AllowedDetailHead_ProducesDetailRows(string head)
+    {
+        var entries  = new List<ParsedEntry> { new("K1", "V1", "string"), new("K2", "V2", "string") };
+        var sections = new List<ParsedSection> { new(head, SectionKind.Settings, entries) };
+        var config   = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        Assert.Equal(2, config.SettingsDetails.Count);
+        Assert.All(config.SettingsDetails, d => Assert.Equal(head, d.SettingsHead));
+        Assert.All(config.SettingsDetails, d => Assert.Equal(0, d.RecordStatus));
+        Assert.All(config.SettingsDetails, d => Assert.Null(d.Aui));
+    }
 
     [Fact]
-    public void Map_ParamsSection_ProducesOneMasterAndManySettings()
+    public void Map_HotelSettingsSection_ProducesMasterButNoDetails()
     {
-        var entries = new List<ParsedEntry>
-        {
-            new("Decimals",         "2",    "string"),
-            new("HomeCurrencyCode", "CAD",  "string"),
-        };
         var sections = new List<ParsedSection>
         {
-            new("HtlGeneral", SectionKind.Params, entries)
+            new("Hotel", SectionKind.Settings, [new("ChannelCodes", "DY,GT", "string")])
         };
-        var parseResult = new ParseResult(sections, []);
-        var config      = CreateMapper().Map(parseResult, DefaultInput());
+        var config = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        // Hotel gets a master row with SettingsType='P'
+        Assert.Single(config.SettingsMaster);
+        Assert.Equal("P", config.SettingsMaster[0].SettingsType);
+
+        // But NO detail rows for Hotel
+        Assert.Empty(config.SettingsDetails);
+    }
+
+    // ── TABLE 4 & 5: Params Master whitelist ─────────────────────────────
+
+    [Theory]
+    [InlineData("Hotel")]
+    [InlineData("HtlGeneral")]
+    [InlineData("ZealConnect")]
+    public void Map_AllowedParamsHead_ProducesMasterRow(string paramsHead)
+    {
+        var encodedName = paramsHead == "Hotel" ? "Hotel" : $"Hotel|{paramsHead}";
+        var sections    = new List<ParsedSection> { new(encodedName, SectionKind.Params, [new("K", "V", "string")]) };
+        var config      = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
 
         Assert.Single(config.ParamsMaster);
-        Assert.Equal("HtlGeneral", config.ParamsMaster[0].ParamsHead);
-        Assert.Equal("Hotel",      config.ParamsMaster[0].SettingHead); // derived from "Htl" prefix
-
-        Assert.Equal(2, config.ParamsSettings.Count);
-        Assert.All(config.ParamsSettings, p => Assert.Equal("HtlGeneral", p.ParamsHead));
+        Assert.Equal(paramsHead, config.ParamsMaster[0].ParamsHead);
+        Assert.Equal("Hotel",    config.ParamsMaster[0].SettingHead);
+        Assert.Equal(0,          config.ParamsMaster[0].RecordStatus);
     }
 
-    // ── Port/Version/Environment injected into every row ──────────────────
+    [Theory]
+    [InlineData("Airline")]
+    [InlineData("Insurance")]
+    [InlineData("Payment")]
+    [InlineData("Utility")]
+    public void Map_NonWhitelistedParamsHead_IsSkipped(string paramsHead)
+    {
+        var sections = new List<ParsedSection> { new(paramsHead, SectionKind.Params, [new("K", "V", "string")]) };
+        var config   = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        Assert.Empty(config.ParamsMaster);
+        Assert.Empty(config.ParamsSettings);
+    }
+
+    [Fact]
+    public void Map_NonWhitelistedParams_ProducesSkippedWarning()
+    {
+        var sections = new List<ParsedSection> { new("Airline", SectionKind.Params, [new("K", "V", "string")]) };
+        var config   = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        Assert.Contains(config.ParseIssues, i => i.Code == "PARAMS_HEAD_SKIPPED");
+    }
+
+    // ── TABLE 5: ParentHead encoding ──────────────────────────────────────
+
+    [Fact]
+    public void Map_HotelParams_HasNullParentHead()
+    {
+        var sections = new List<ParsedSection>
+        {
+            new("Hotel", SectionKind.Params, [new("ChannelCodes", "DY,GT", "string")])
+        };
+        var config = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        Assert.Single(config.ParamsSettings);
+        Assert.Null(config.ParamsSettings[0].ParentHead);
+        Assert.Equal("Hotel",        config.ParamsSettings[0].ParamsHead);
+        Assert.Equal("ChannelCodes", config.ParamsSettings[0].MemberName);
+    }
+
+    [Theory]
+    [InlineData("HtlGeneral")]
+    [InlineData("ZealConnect")]
+    public void Map_ChildParams_HasHotelAsParentHead(string childName)
+    {
+        var sections = new List<ParsedSection>
+        {
+            new($"Hotel|{childName}", SectionKind.Params, [new("Decimals", "2", "string")])
+        };
+        var config = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        Assert.Single(config.ParamsSettings);
+        Assert.Equal(childName, config.ParamsSettings[0].ParamsHead);
+        Assert.Equal("Hotel",   config.ParamsSettings[0].ParentHead);
+    }
+
+    // ── TABLE 1: Database selection rules ─────────────────────────────────
+
+    [Fact]
+    public void Map_DatabaseGroup_RuleA_ActiveEntrySelected()
+    {
+        // Type 3: two entries, one active (aerospike) and one inactive (mysql)
+        var mysql = new List<ParsedEntry>
+        {
+            new("DataBaseType", "3", "number"), new("Description", "Cache", "string"),
+            new("ActiveStatus", "false", "string"), new("ReadEnable", "true", "string"),
+            new("WriteEnable", "true", "string"), new("Provider", "mysql", "string"),
+        };
+        var aerospike = new List<ParsedEntry>
+        {
+            new("DataBaseType", "3", "number"), new("Description", "Cache", "string"),
+            new("ActiveStatus", "true", "string"), new("ReadEnable", "true", "string"),
+            new("WriteEnable", "true", "string"), new("Provider", "aerospike", "string"),
+        };
+
+        var sections = new List<ParsedSection>
+        {
+            new("Databases", SectionKind.Database, mysql),
+            new("Databases", SectionKind.Database, aerospike),
+        };
+        var config = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        // Rule A: only the active entry is inserted
+        Assert.Single(config.Databases);
+        Assert.Equal("aerospike", config.Databases[0].Provider);
+        Assert.Equal(0, config.Databases[0].RecordStatus);
+    }
+
+    [Fact]
+    public void Map_DatabaseGroup_RuleB_SingleInactiveEntry()
+    {
+        // Single entry that is inactive
+        var entries = new List<ParsedEntry>
+        {
+            new("DataBaseType", "2", "number"), new("Description", "Store", "string"),
+            new("ActiveStatus", "false", "string"), new("ReadEnable", "false", "string"),
+            new("WriteEnable", "false", "string"), new("Provider", "mysql", "string"),
+        };
+        var sections = new List<ParsedSection>
+        {
+            new("Databases", SectionKind.Database, entries),
+        };
+        var config = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        // Rule B: inserted with ReadEnable=0, WriteEnable=0, RecordStatus=0
+        Assert.Single(config.Databases);
+        var db = config.Databases[0];
+        Assert.Equal(0, db.ReadEnable);
+        Assert.Equal(0, db.WriteEnable);
+        Assert.Equal(0, db.RecordStatus);
+    }
+
+    [Fact]
+    public void Map_DatabaseGroup_RuleC_MultipleAllInactive_TakesFirst()
+    {
+        // Multiple entries all inactive — only first is taken, RecordStatus=1
+        var entry1 = new List<ParsedEntry>
+        {
+            new("DataBaseType", "16", "number"), new("Description", "Cache Write", "string"),
+            new("ActiveStatus", "false", "string"), new("Provider", "mysql", "string"),
+            new("DataBaseName", "b2ccachedb", "string"),
+        };
+        var entry2 = new List<ParsedEntry>
+        {
+            new("DataBaseType", "16", "number"), new("Description", "Cache Write", "string"),
+            new("ActiveStatus", "false", "string"), new("Provider", "aerospike", "string"),
+            new("DataBaseName", "cache:cache", "string"),
+        };
+        var sections = new List<ParsedSection>
+        {
+            new("Databases", SectionKind.Database, entry1),
+            new("Databases", SectionKind.Database, entry2),
+        };
+        var config = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        // Rule C: only first entry, RecordStatus=1, ReadEnable=0, WriteEnable=0
+        Assert.Single(config.Databases);
+        var db = config.Databases[0];
+        Assert.Equal("b2ccachedb", db.DataBaseName);
+        Assert.Equal(1, db.RecordStatus);
+        Assert.Equal(0, db.ReadEnable);
+        Assert.Equal(0, db.WriteEnable);
+    }
+
+    [Fact]
+    public void Map_DatabaseGroup_RecordStatus_ActiveIsZero_InactiveIsOne()
+    {
+        var active = new List<ParsedEntry>
+        {
+            new("DataBaseType", "1", "number"), new("ActiveStatus", "true", "string"),
+            new("Provider", "mysql", "string"),
+        };
+        var sections = new List<ParsedSection> { new("Databases", SectionKind.Database, active) };
+        var config   = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        Assert.Single(config.Databases);
+        Assert.Equal(0, config.Databases[0].RecordStatus); // active → 0
+        Assert.Equal(1, config.Databases[0].ActiveStatus);
+    }
+
+    [Fact]
+    public void Map_Database_AuiAlwaysNull()
+    {
+        var entries = new List<ParsedEntry>
+        {
+            new("DataBaseType", "1", "number"), new("ActiveStatus", "true", "string"),
+            new("AUI", "somevalue", "string"), // even if present in source
+        };
+        var sections = new List<ParsedSection> { new("Databases", SectionKind.Database, entries) };
+        var config   = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
+
+        Assert.Null(config.Databases[0].Aui);
+    }
+
+    // ── Port / Version / Environment injected ────────────────────────────
 
     [Fact]
     public void Map_PortVersionEnvironment_InjectedIntoAllRows()
     {
         var sections = new List<ParsedSection>
         {
-            new("Hotel",      SectionKind.Settings, [new("Key", "Val", "string")]),
-            new("HtlGeneral", SectionKind.Params,   [new("Key", "Val", "string")]),
+            new("GenSettings",  SectionKind.Settings, [new("K", "V", "string")]),
+            new("Hotel|HtlGeneral", SectionKind.Params, [new("K", "V", "string")]),
         };
-        var parseResult = new ParseResult(sections, []);
-        var input       = new ConfigurationInput
+        var input  = new ConfigurationInput
         {
             JsonContent = "{}", FileName = "f.json",
             Port = "8080", Version = "6.0", Environment = "LIVE", IncludeTransaction = false
         };
-        var config = CreateMapper().Map(parseResult, input);
+        var config = CreateMapper().Map(new ParseResult(sections, []), input);
 
         Assert.All(config.SettingsMaster,  r => Assert.Equal("8080", r.Port));
         Assert.All(config.SettingsDetails, r => Assert.Equal("8080", r.Port));
         Assert.All(config.ParamsMaster,    r => Assert.Equal("8080", r.Port));
         Assert.All(config.ParamsSettings,  r => Assert.Equal("8080", r.Port));
-
         Assert.All(config.SettingsDetails, r => Assert.Equal("LIVE", r.Environment));
         Assert.All(config.ParamsSettings,  r => Assert.Equal("LIVE", r.Environment));
     }
@@ -136,42 +331,30 @@ public sealed class ConfigurationMapperTests
     // ── Null value preservation ───────────────────────────────────────────
 
     [Fact]
-    public void Map_NullParsedEntry_ProducesNullMemberValue()
+    public void Map_NullParsedEntry_PreservesNullMemberValue()
     {
         var sections = new List<ParsedSection>
         {
-            new("Hotel", SectionKind.Settings, [new("Region", null, "null")])
+            new("GenSettings", SectionKind.Settings, [new("Region", null, "null")])
         };
-        var parseResult = new ParseResult(sections, []);
-        var config      = CreateMapper().Map(parseResult, DefaultInput());
+        var config = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
 
         Assert.Single(config.SettingsDetails);
         Assert.Null(config.SettingsDetails[0].MemberValue);
     }
 
-    // ── Database section ──────────────────────────────────────────────────
+    // ── Duplicate detection ───────────────────────────────────────────────
 
     [Fact]
-    public void Map_DatabaseSection_ProducesDatabaseEntry()
+    public void Map_DuplicateAllowedSettingsSectionName_OneMasterRowProduced()
     {
-        var entries = new List<ParsedEntry>
+        var sections = new List<ParsedSection>
         {
-            new("Server",       "db.example.com", "string"),
-            new("DataBaseName", "hoteldb",         "string"),
-            new("UserName",     "admin",           "string"),
-            new("Password",     "s3cr3t",          "string"),
-            new("DataBaseType", "1",               "number"),
+            new("GenSettings", SectionKind.Settings, [new("K1", "V1", "string")]),
+            new("GenSettings", SectionKind.Settings, [new("K2", "V2", "string")]),
         };
-        var sections    = new List<ParsedSection> { new("Databases", SectionKind.Database, entries) };
-        var parseResult = new ParseResult(sections, []);
-        var config      = CreateMapper().Map(parseResult, DefaultInput());
+        var config = CreateMapper().Map(new ParseResult(sections, []), DefaultInput());
 
-        Assert.Single(config.Databases);
-        var db = config.Databases[0];
-        Assert.Equal("db.example.com", db.Server);
-        Assert.Equal("hoteldb",         db.DataBaseName);
-        Assert.Equal("admin",           db.UserName);
-        Assert.Equal("s3cr3t",          db.Password);
-        Assert.Equal(1,                 db.DataBaseType);
+        Assert.Single(config.SettingsMaster);
     }
 }
